@@ -11,14 +11,8 @@ capturas_testing/
 dataset_adas/
 datasets/
 runs/
-*.mp4
-*.avi
-*.mov
-*.jpg
-*.jpeg
-*.png
-*.csv
-*.jsonl
+grabacion_gaze_*.mp4
+gaze_testing_report_*.json
 
 # Environments and Caches
 __pycache__/
