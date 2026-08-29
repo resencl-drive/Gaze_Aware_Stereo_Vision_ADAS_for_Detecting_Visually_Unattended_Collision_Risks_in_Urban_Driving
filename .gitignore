@@ -1,11 +1,11 @@
-# Modelos y pesos externos
+# External Models and Weights
 *.pt
 *.pth
 *.blob
 *.onnx
 *.engine
 
-# Datos y salidas experimentales
+# Experimental Data and Outputs
 outputs/
 capturas_testing/
 dataset_adas/
@@ -20,14 +20,14 @@ runs/
 *.csv
 *.jsonl
 
-# Entornos y cachés
+# Environments and Caches
 __pycache__/
 *.py[cod]
 .venv/
 venv/
 .cache/
 
-# Editores y sistema operativo
+# Editors and Operating System
 .idea/
 .vscode/
 .DS_Store
