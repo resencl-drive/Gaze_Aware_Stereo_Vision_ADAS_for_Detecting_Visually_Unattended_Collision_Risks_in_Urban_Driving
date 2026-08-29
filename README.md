@@ -1,69 +1,83 @@
-# Real-time ADAS gaze and planar-distance estimation
 
-> **Alcance de esta carpeta:** código fuente y calibración numérica. No contiene
-> el manuscrito, pesos, imágenes, videos ni datos de participantes. Consulta
-> `LEGAL_AUDIT.md` y `LEGAL_CHECKLIST.md` antes de añadir otros archivos.
+# Real-Time ADAS Gaze and Planar-Distance Estimation
 
-Implementación asociada al paper para estimación de mirada, detección ADAS, profundidad, TTC y métricas de rendimiento con dos cámaras OAK-D.
+> **Repository scope:** This folder contains source code and numerical calibration files only. It does not include the manuscript, model weights, images, videos, or participant data. 
 
-## Privacidad
+This repository contains the implementation associated with the paper, including driver gaze estimation, ADAS object detection, depth estimation, time-to-collision (TTC) computation, and performance metrics using two OAK-D cameras.
 
-La ejecución predeterminada no debe escribir videos, imágenes, frames de datasets ni reportes. Las métricas de la interfaz se mantienen en memoria y los identificadores físicos de las cámaras no están incluidos en el código.
+## Privacy
 
-Las opciones de grabación pueden almacenar imágenes del conductor. Úsalas solamente con consentimiento informado y una política de retención adecuada.
+By default, the application does not write videos, images, dataset frames, or reports to disk. Interface metrics are maintained in memory, and the physical identifiers of the cameras are not included in the source code.
 
-## Instalación
+Optional recording features may store images of the driver. These features should only be used under appropriate informed-consent procedures and with a suitable data-retention policy.
 
-Las dependencias de Python 3.11 están fijadas en `requirements.txt`. La ejecución
-integral requiere dos cámaras OAK-D y los pesos descritos en el paper, que no se
-incluyen en esta carpeta.
+## Installation
 
-```bash
-python -m venv .venv
-python -m pip install -r requirements.txt
-```
+The project targets Python 3.11, and its dependencies are pinned in `requirements.txt`.
 
-Los pesos (`.pt`) y modelos DepthAI (`.blob`) no se versionan. Consulta
-`models/README.md`, obtén cada archivo de una fuente autorizada y colócalo en
-la ruta indicada o utiliza los argumentos de línea de comandos.
+Full system execution requires two OAK-D cameras and the model weights described in the associated paper. These weights are not distributed with this repository.
 
-## Ejecución
+Model weights (`.pt`) and DepthAI model files (`.blob`) are intentionally excluded from version control.
+
+Refer to `models/README.md` for the expected model locations. Each required file must be obtained from an authorized source and placed in the corresponding directory, or its location must be provided through the available command-line arguments.
+
+## Running the System
+
+To start the real-time application:
 
 ```bash
-python adas_gaze_realtime.py
+python paquete_metricas_tesis_adas/adas_gaze_realtime.py
 ```
 
-La rama interior usa RGB-D: detecta el rostro, estima 35 landmarks, alinea el
-recorte y calcula el origen 3D del rayo de mirada con la profundidad estéreo de
-la OAK-D Pro. Si no hay landmarks o profundidad facial válida, ese frame no se
-clasifica como procesado.
+The driver-facing processing branch uses RGB-D data from the OAK-D Pro. It detects the driver’s face, estimates 35 facial landmarks, aligns the face crop, and computes the 3D origin of the gaze ray using stereo-depth information.
 
-El ejecutable usa por defecto ResNet-101 y la calibración extrínseca
-`extrinsics_pro_to_lr_no_mirror.json`.
+Frames without valid facial landmarks or valid facial-depth measurements are not considered successfully processed for the driver gaze estimation branch.
 
-Para fijar el orden de cámaras sin publicar sus identificadores:
+By default, the application uses a ResNet-101 gaze-estimation backbone together with the extrinsic calibration stored in:
+
+`calibracion_extrinseca/extrinsics_pro_to_lr_no_mirror.json`
+
+To explicitly assign the cameras while keeping their hardware identifiers out of the repository, use:
 
 ```bash
-python adas_gaze_realtime.py --lr-device-id MXID_1 --pro-device-id MXID_2
+python paquete_metricas_tesis_adas/adas_gaze_realtime.py --lr-device-id MXID_1 --pro-device-id MXID_2
 ```
 
-Las salidas opcionales se habilitan con `--save-reports`, `--record-video`, `--save-captures` y `--save-dataset-frames`, y se escriben en `outputs/`.
+Optional outputs can be enabled with:
 
-## Pesos
+```bash
+python paquete_metricas_tesis_adas/adas_gaze_realtime.py \
+  --lr-device-id MXID_1 \
+  --pro-device-id MXID_2 \
+  --save-reports \
+  --record-video \
+  --save-captures \
+  --save-dataset-frames
+```
 
-Este repositorio no redistribuye pesos mediante Git, Releases, LFS u otro
-servicio. Solo conserva las rutas esperadas y no descarga pesos silenciosamente.
+These optional outputs are written to `outputs/` by default, but only when the corresponding flag is enabled. In particular:
 
-## Licencia y cita
+- `--save-reports`: saves the JSON validation report
+- `--record-video`: saves the processed video stream
+- `--save-captures`: saves captured images (which may include faces)
+- `--save-dataset-frames`: saves LR frames for YOLO dataset preparation
 
-El código se publica bajo GNU AGPL-3.0 para ser compatible con la dependencia
-Ultralytics. Consulta `LICENSE` y `THIRD_PARTY_NOTICES.md`. La intención del
-proyecto es la investigación académica, pero la AGPL-3.0 no permite imponer una
-restricción adicional de "solo uso académico".
+## Model Weights
 
-La licencia del código no elimina las restricciones de los modelos. En
-particular, el sistema completo con un checkpoint derivado de ETH-XGaze queda
-limitado a investigación académica no comercial y dicho checkpoint no puede
-redistribuirse.
+This repository does not redistribute model weights through Git, GitHub Releases, Git LFS, or any other distribution mechanism.
+
+Only the expected model paths are defined in the repository, and the application does not silently download model weights at runtime.
+
+Users are responsible for obtaining all required models from authorized sources and for complying with the applicable licenses and usage restrictions.
+
+## License and Citation
+
+The source code is released under the GNU AGPL-3.0 license to maintain compatibility with the Ultralytics dependency.
+
+See `LICENSE` and `THIRD_PARTY_NOTICES.md` for additional licensing information.
+
+Although this project is primarily intended for academic research, the source code is distributed under the terms of the GNU AGPL-3.0 license.
+
+In particular, when the system is used with a checkpoint derived from ETH-XGaze, the corresponding model remains subject to its original licensing terms, including restrictions to non-commercial academic research where applicable. Such checkpoints must not be redistributed through this repository.
 
 
