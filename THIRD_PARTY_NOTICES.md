@@ -1,19 +1,17 @@
-# Dependencias y modelos externos
+# # Third-Party Dependencies and Models
 
-Este repositorio contiene código propio, pero no concede derechos sobre modelos,
-datasets ni bibliotecas de terceros.
+This repository contains original source code, but it does not grant rights to third-party models, datasets, or libraries..
 
-- Ultralytics se utiliza para ejecutar YOLOv8n-Seg y se distribuye bajo
-  AGPL-3.0 o licencia empresarial: <https://www.ultralytics.com/license>.
-- PyTorch y TorchVision conservan sus licencias BSD respectivas.
-- DepthAI conserva la licencia MIT de Luxonis.
-- OpenCV conserva su licencia Apache-2.0.
-- Open Model Zoo y sus modelos Intel se ofrecen bajo Apache-2.0. Los blobs se
-  obtienen separadamente de la fuente oficial y conservan sus avisos.
-- Los checkpoints entrenados con ETH-XGaze no se redistribuyen. Sus términos
-  prohíben distribuir parámetros originales o convertidos y limitan el uso a
-  investigación académica no comercial:
+-Ultralytics is used to run YOLOv8n-Seg and is distributed under the
+  AGPL-3.0 license or an enterprise license: <https://www.ultralytics.com/license>.
+- PyTorch and TorchVision remain subject to their respective BSD licenses.
+- DepthAI remains subject to the Luxonis MIT license.
+- OpenCV remains subject to the Apache-2.0 license.
+- Open Model Zoo and its Intel models are provided under the Apache-2.0 license.
+  The model blobs are obtained separately from the official source and retain
+  their original notices.
+- Checkpoints trained with ETH-XGaze are not redistributed. Their terms
+  prohibit redistribution of original or converted model parameters and limit
+  their use to non-commercial academic research:
   <https://xgaze.ait.ethz.ch/>.
-
-La ausencia de pesos es deliberada. Cada usuario debe obtenerlos legalmente y
-proporcionar sus rutas mediante los argumentos del programa.
+The absence of model weights is intentional. Each user is responsible for obtaining them from authorized sources and providing their paths through the program's command-line arguments.
