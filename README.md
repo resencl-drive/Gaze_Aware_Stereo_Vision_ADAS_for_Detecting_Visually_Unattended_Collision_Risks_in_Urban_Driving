@@ -21,6 +21,17 @@ Model weights (`.pt`) and DepthAI model files (`.blob`) are intentionally exclud
 
 Refer to `models/README.md` for the expected model locations. Each required file must be obtained from an authorized source and placed in the corresponding directory, or its location must be provided through the available command-line arguments.
 
+## Training the Gaze Models
+
+The reproducible training implementation is available in
+`training/train_gaze_models.py`. It includes the five architectures and the
+model-specific hyperparameters reported in the paper, including the combined
+Smooth L1 and angular loss used for gaze regression.
+
+See `training/README.md` for the expected ETH-XGaze HDF5 layout, installation
+instructions, and the ResNet-101 training command. Datasets and trained
+checkpoints are deliberately excluded from this repository.
+
 ## Running the System
 
 To start the real-time application:

@@ -4,6 +4,8 @@
 *.blob
 *.onnx
 *.engine
+*.h5
+*.hdf5
 
 # Experimental Data and Outputs
 outputs/
