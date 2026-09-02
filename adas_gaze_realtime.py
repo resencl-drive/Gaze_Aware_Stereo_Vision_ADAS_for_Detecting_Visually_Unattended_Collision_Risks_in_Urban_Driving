@@ -35,11 +35,16 @@ try:
 except ImportError:
     print("⚠️ Ultralytics no instalado. Ejecuta: pip install ultralytics")
 
-# Importar funciones compartidas desde la raíz del repositorio.
+# Import shared functions from the repository root.
 PROJECT_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(PROJECT_ROOT))
 from gaze_models import (
     _extract_sd, get_gaze_model
+)
+from gaze_geometry import (
+    build_face_alignment_transform,
+    model_angles_to_direction,
+    validate_proper_rotation,
 )
 
 class GazeAwareADAS:
@@ -54,6 +59,10 @@ class GazeAwareADAS:
         self.T_lr_from_pro_m = np.zeros(3, dtype=np.float64)
         self.extrinsic_rmse_mm = None
         self.load_extrinsic_calibration(args.extrinsics)
+        # Existing end-to-end convention validated with the published results:
+        # model directions are interpreted directly in the PRO camera frame.
+        self.R_pro_from_model = np.eye(3, dtype=np.float64)
+        self.model_frame_status = "existing-validated-convention"
         self.asset_paths = self.validate_required_models()
         self.device_lr = None
         self.device_pro = None
@@ -62,23 +71,22 @@ class GazeAwareADAS:
         self.current_model_config = {}
         self.model_names = ["resnet101_v2"]
         self.model_index = 0
-        
-        # Datos de validación manual opcional.
+
+        # Optional manual-validation data.
         self.test_samples = []
         self.current_session = []
-        self.gaze_history = deque(maxlen=2)  # Suavizado ligero para ser más responsivo
+        self.gaze_history = deque(maxlen=2)  # Light smoothing preserves responsiveness.
         
-        # UI state
         self.waiting_for_click = False
         self.is_paused = False
         self.last_gaze_point = (320, 180)
+        self.gaze_valid = False
+        self.last_projection_status = "not-evaluated"
         self.click_point = None
         self.error_distance = 0
         self.last_frame = None
 
-        # FPS en vivo
-        # - FPS del programa: ciclo completo de procesamiento (LR + Pro + depth + YOLO + gaze + UI)
-        # - FPS LR/Pro: FPS efectivo de cada stream recibido desde cada cámara
+        # Live FPS for the full processing loop and each camera stream.
         self.current_fps = 0.0
         self.avg_fps = 0.0
         self.fps_history = deque(maxlen=30)
@@ -94,7 +102,7 @@ class GazeAwareADAS:
         self._camera_first_wall_time = {'LR': None, 'Pro': None}
         self._camera_last_wall_time = {'LR': None, 'Pro': None}
         
-        # Depth & Parallax settings
+        # Depth and parallax state.
         self.last_depth_frame = None
         self.last_pro_depth_frame = None
         self.face_origin_pro = None
@@ -108,12 +116,12 @@ class GazeAwareADAS:
             'nss_scores': []
         })
         
-        # Métricas de latencia y alarma
-        self.pipeline_latencies = []       # ms de captura → alarma por frame
-        self.alarm_events = []             # cada evento de alarma registrado
-        self.alarm_trigger_count = 0      # cuántas veces se disparó
-        self.total_frames_processed = 0   # frames totales analizados
-        self.frames_with_danger = 0       # frames donde había peligro no visto
+        # Latency and warning metrics.
+        self.pipeline_latencies = []       # Capture-to-warning latency per frame in ms.
+        self.alarm_events = []
+        self.alarm_trigger_count = 0
+        self.total_frames_processed = 0
+        self.frames_with_danger = 0
         self.risk_condition_frames = 0
         self.alarm_positive_frames = 0
         self.ttc_positive_frames = 0
@@ -121,7 +129,7 @@ class GazeAwareADAS:
         self.landmark_valid_frames = 0
         self.rgbd_face_depth_valid_frames = 0
         
-        # Heatmap pre-computation (Para estilo DR(eye)VE)
+        # Precompute the DR(eye)VE-style heatmap.
         self.hm_size = 140
         self.hm_radius = self.hm_size // 2
         x = np.arange(0, self.hm_size, 1, float)
@@ -137,14 +145,14 @@ class GazeAwareADAS:
         self.heatmap_color = cv2.applyColorMap(heatmap_gray, cv2.COLORMAP_JET)
         self.heatmap_alpha = gaussian[:, :, np.newaxis] * 0.6  # 60% max opacity
         
-        # YOLO segmentation and Alarm state
+        # YOLO segmentation and warning state.
         self.yolo_model = None
         self.current_looking_at = "Fondo"
         self.alarm_active = False
         self.last_alarm_time = 0
-        self.alarm_cooldown = 0.5  # Segundos entre pitidos
+        self.alarm_cooldown = 0.5  # Seconds between audible warnings.
         
-        # Optical Flow + RANSAC vehicle motion estimation
+        # Optical flow and RANSAC vehicle-motion estimation.
         self.prev_gray = None
         self.prev_pts = None
         self.feature_params = dict(maxCorners=400, qualityLevel=0.01, minDistance=20, blockSize=3)
@@ -152,10 +160,10 @@ class GazeAwareADAS:
         self.vehicle_moving = False
         self.motion_magnitude = 0.0
         
-        # Object tracking and TTC (Time-to-Collision)
+        # Object tracking and Time-to-Collision (TTC).
         self.tracked_objects = {}
         self.next_track_id = 0
-        self.ttc_threshold = 2.0  # seconds
+        self.ttc_threshold = 2.0
         self.depth_history_length = 5
         self.previous_frame_input_time = None
 
@@ -165,7 +173,6 @@ class GazeAwareADAS:
         self.ttc_positive_records = 0
         self.unattended_ttc_positive_records = 0
         
-        # Initial frame counts
         self.current_counts = {
             'reliable_stereo': 0,
             'far_stereo': 0,
@@ -186,7 +193,6 @@ class GazeAwareADAS:
             except Exception as e:
                 print(f"❌ Error al cargar YOLOv8: {e}")
         
-        # Queue handles (initialized by setup_oak_devices)
         self.lr_queue = None
         self.pro_queue = None
         self.face_queue = None
@@ -195,10 +201,9 @@ class GazeAwareADAS:
         self.landmark_input_queue = None
         self.landmark_output_queue = None
         
-        # Initialize OAK-D devices
-        self.setup_oak_devices()
+        if not self.setup_oak_devices():
+            raise RuntimeError("No fue posible asignar las cámaras OAK-D")
         
-        # Load initial model
         self.load_selected_model()
     
     def load_extrinsic_calibration(self, calibration_path):
@@ -216,8 +221,7 @@ class GazeAwareADAS:
                 translation = translation / 1000.0
             elif translation_unit != "m":
                 raise ValueError("translation_unit must be explicitly 'm' or 'mm'")
-            if rotation.shape != (3, 3) or not np.isfinite(rotation).all():
-                raise ValueError("R must be a finite 3x3 matrix")
+            rotation = validate_proper_rotation(rotation)
             if translation.shape != (3,) or not np.isfinite(translation).all():
                 raise ValueError("T must be a finite three-vector")
             self.R_lr_from_pro = rotation
@@ -230,7 +234,7 @@ class GazeAwareADAS:
             raise RuntimeError(f"No se pudo cargar la calibración extrínseca {path}: {exc}") from exc
 
     def validate_required_models(self):
-        """Valida modelos locales para impedir descargas automáticas implícitas."""
+        """Validate local model files and prevent implicit downloads."""
         configured = {
             "yolo_model": self.args.yolo_model,
             "gaze_model": self.args.gaze_model,
@@ -256,7 +260,7 @@ class GazeAwareADAS:
         return resolved
 
     def setup_oak_devices(self):
-        """Initialize OAK-D LR and Pro devices"""
+        """Initialize the OAK-D LR and Pro devices."""
         print("🔍 Buscando dispositivos OAK...")
         device_infos = dai.Device.getAllAvailableDevices()
         
@@ -267,35 +271,49 @@ class GazeAwareADAS:
         device_lr = None
         device_pro = None
         
-        # Device identifiers are configuration, not source code.
-        if self.args.lr_device_id or self.args.pro_device_id:
-            for info in device_infos:
-                mxid = str(info.getMxId())
-                if self.args.lr_device_id and mxid == self.args.lr_device_id:
-                    device_lr = info
-                if self.args.pro_device_id and mxid == self.args.pro_device_id:
-                    device_pro = info
-            remaining = [info for info in device_infos if info not in (device_lr, device_pro)]
-            if device_lr is None and remaining:
-                device_lr = remaining.pop(0)
-            if device_pro is None and remaining:
-                device_pro = remaining.pop(0)
-        else:
+        # USB enumeration order is not a semantic camera role. Requiring both
+        # identifiers prevents applying PRO->LR geometry to swapped streams.
+        if bool(self.args.lr_device_id) != bool(self.args.pro_device_id):
+            raise ValueError("Debes indicar juntos --lr-device-id y --pro-device-id")
+        if self.args.lr_device_id and self.args.pro_device_id:
+            if self.args.lr_device_id == self.args.pro_device_id:
+                raise ValueError("LR y Pro no pueden usar el mismo MXID")
+            by_id = {str(info.getMxId()): info for info in device_infos}
+            device_lr = by_id.get(self.args.lr_device_id)
+            device_pro = by_id.get(self.args.pro_device_id)
+            if device_lr is None or device_pro is None:
+                available = ", ".join(sorted(by_id))
+                raise RuntimeError(f"MXID solicitado no disponible. Detectados: {available}")
+        elif self.args.allow_auto_device_order:
+            print("ADVERTENCIA: asignando LR/Pro por orden USB; la geometría puede quedar invertida")
             device_lr, device_pro = device_infos[:2]
+        else:
+            available = ", ".join(str(info.getMxId()) for info in device_infos)
+            raise RuntimeError(
+                "La asignación automática de LR/Pro está desactivada. "
+                f"Detectados: {available}. Usa --lr-device-id y --pro-device-id."
+            )
         
         if not device_lr or not device_pro:
             print("❌ No se encontraron los dispositivos OAK-D específicos")
             return False
         
-        # Initialize LR device (road camera)
+        # Road-facing OAK-D LR.
         self.device_lr = dai.Device(device_lr)
+        lr_product = str(self.device_lr.getProductName() or self.device_lr.getDeviceName())
+        if "PRO" in lr_product.upper():
+            self.device_lr.close()
+            raise RuntimeError(
+                f"El MXID indicado como LR pertenece a {lr_product}; los roles están intercambiados"
+            )
         lr_pipeline = dai.Pipeline()
         
-        # LR camera setup
         cam_lr = lr_pipeline.create(dai.node.ColorCamera)
         cam_lr.setPreviewSize(640, 360)
-        cam_lr.setResolution(dai.ColorCameraProperties.SensorResolution.THE_1080_P)
-        cam_lr.setIspScale(1, 3)  # Reduce el ISP a 640x360 para evitar el error de límite 1280 en StereoDepth
+        # OAK-D LR uses AR0234 1200p color sensors; 1080p belongs to the Pro's
+        # IMX378 and only appeared to work while the devices were swapped.
+        cam_lr.setResolution(dai.ColorCameraProperties.SensorResolution.THE_1200_P)
+        # Match the 30 FPS RGB capture rate reported in the paper.
         cam_lr.setFps(30)
         cam_lr.setInterleaved(False)
         cam_lr.setColorOrder(dai.ColorCameraProperties.ColorOrder.BGR)
@@ -304,18 +322,22 @@ class GazeAwareADAS:
         xout_lr.setStreamName("lr")
         cam_lr.preview.link(xout_lr.input)
         
-        # Stereo Depth for LR camera (Using ColorCamera node to enable ISP scaling for AR0234 sensors)
+        # ColorCamera nodes enable ISP scaling for the LR AR0234 stereo pair.
         mono_left = lr_pipeline.create(dai.node.ColorCamera)
         mono_right = lr_pipeline.create(dai.node.ColorCamera)
         stereo = lr_pipeline.create(dai.node.StereoDepth)
         
         mono_left.setResolution(dai.ColorCameraProperties.SensorResolution.THE_1200_P)
         mono_left.setBoardSocket(dai.CameraBoardSocket.LEFT)
-        mono_left.setIspScale(2, 3) # Scale 1920x1200 down to 1280x800
+        mono_left.setFps(30)
+        # OV9782 sensors expose 1280x800. A 2/3 ISP scale produces an
+        # unsupported 854 px width; 1/2 keeps the stereo input at 640x400.
+        mono_left.setIspScale(1, 2)
         
         mono_right.setResolution(dai.ColorCameraProperties.SensorResolution.THE_1200_P)
         mono_right.setBoardSocket(dai.CameraBoardSocket.RIGHT)
-        mono_right.setIspScale(2, 3)
+        mono_right.setFps(30)
+        mono_right.setIspScale(1, 2)
         
         stereo.setDefaultProfilePreset(dai.node.StereoDepth.PresetMode.HIGH_DENSITY)
         stereo.setDepthAlign(dai.CameraBoardSocket.RGB)
@@ -341,11 +363,17 @@ class GazeAwareADAS:
         self.lr_queue = self.device_lr.getOutputQueue("lr", 4, False)
         self.depth_queue = self.device_lr.getOutputQueue("depth", 4, False)
         
-        # Initialize Pro device (driver camera)
+        # Driver-facing OAK-D Pro.
         self.device_pro = dai.Device(device_pro)
+        pro_product = str(self.device_pro.getProductName() or self.device_pro.getDeviceName())
+        if "PRO" not in pro_product.upper():
+            self.device_pro.close()
+            self.device_lr.close()
+            raise RuntimeError(
+                f"El MXID indicado como Pro pertenece a {pro_product}; los roles están intercambiados"
+            )
         pro_pipeline = dai.Pipeline()
         
-        # Pro camera setup
         cam_pro = pro_pipeline.create(dai.node.ColorCamera)
         cam_pro.setPreviewSize(640, 360)
         cam_pro.setResolution(dai.ColorCameraProperties.SensorResolution.THE_1080_P)
@@ -353,7 +381,7 @@ class GazeAwareADAS:
         cam_pro.setInterleaved(False)
         cam_pro.setColorOrder(dai.ColorCameraProperties.ColorOrder.BGR)
 
-        # RGB-D interior: profundidad estéreo alineada al stream RGB del conductor.
+        # Driver-facing RGB-D depth aligned with the RGB stream.
         pro_left = pro_pipeline.create(dai.node.MonoCamera)
         pro_right = pro_pipeline.create(dai.node.MonoCamera)
         pro_stereo = pro_pipeline.create(dai.node.StereoDepth)
@@ -373,7 +401,7 @@ class GazeAwareADAS:
         pro_depth_xout.setStreamName("pro_depth")
         pro_stereo.depth.link(pro_depth_xout.input)
         
-        # Face detection with resize
+        # Face detection operates on a resized input.
         face_manip = pro_pipeline.create(dai.node.ImageManip)
         face_manip.initialConfig.setResize(300, 300)
         face_manip.initialConfig.setFrameType(dai.ImgFrame.Type.BGR888p)
@@ -388,7 +416,7 @@ class GazeAwareADAS:
         face_det_xout.setStreamName("face_detections")
         face_det_nn.out.link(face_det_xout.input)
 
-        # Landmarks de 35 puntos. El recorte facial se envía desde el host a 60x60.
+        # The host sends a 60x60 face crop to the 35-point landmark model.
         landmark_in = pro_pipeline.create(dai.node.XLinkIn)
         landmark_in.setStreamName("landmark_in")
         landmark_nn = pro_pipeline.create(dai.node.NeuralNetwork)
@@ -418,20 +446,20 @@ class GazeAwareADAS:
         self.landmark_input_queue = self.device_pro.getInputQueue("landmark_in")
         self.landmark_output_queue = self.device_pro.getOutputQueue("landmark_out", 2, True)
         
-        print("✅ Cámaras OAK-D asignadas (identificadores ocultos)")
+        print(f"Cámaras verificadas: LR={lr_product}, conductor={pro_product}")
         return True
     
     def load_gaze_model(self, model_name):
-        """Carga el ResNet-101 seleccionado en el paper."""
+        """Load the ResNet-101 model selected in the paper."""
         configs = {
             "resnet101_v2": {
                 "path": str(self.asset_paths["gaze_model"]),
                 "builder": get_gaze_model,
                 "strip_prefix": False,
                 "extract_key": None,
-                # El modelo entrega (pitch, yaw); la interfaz interna usa (yaw, pitch).
+                # The model returns (pitch, yaw); the internal interface uses (yaw, pitch).
                 "swap_axes": True,
-                "invert_y": True    # Adapta el signo vertical al eje Y de la imagen.
+                "invert_y": True    # Adapt the vertical sign to the image Y axis.
             }
         }
         
@@ -465,18 +493,16 @@ class GazeAwareADAS:
             return None, {}
     
     def load_selected_model(self):
-        """Carga el modelo de mirada seleccionado para el sistema."""
+        """Load the gaze model selected for the system."""
         self.current_model_name = self.model_names[self.model_index]
         result = self.load_gaze_model(self.current_model_name)
         
-        # Handle both (model, config) tuple or just model
         if isinstance(result, tuple):
             self.current_model, self.current_model_config = result
         else:
             self.current_model = result
             self.current_model_config = {}
         
-        # Reset current session
         self.current_session = []
         self.waiting_for_click = False
         
@@ -519,7 +545,7 @@ class GazeAwareADAS:
             return 0.0, 0.0
 
     def align_face_with_landmarks(self, pro_frame, face_box):
-        """Detecta 35 landmarks y produce un rostro alineado de 224x224."""
+        """Detect 35 landmarks and produce a 224x224 aligned face crop."""
         x1, y1, x2, y2 = face_box
         crop = pro_frame[y1:y2, x1:x2]
         if crop.size == 0 or self.landmark_input_queue is None:
@@ -542,11 +568,10 @@ class GazeAwareADAS:
         left_eye = points[[0, 1]].mean(axis=0)
         right_eye = points[[2, 3]].mean(axis=0)
         mouth = points[[8, 9]].mean(axis=0)
-        source = np.float32([left_eye, right_eye, mouth])
-        target = np.float32([[72.0, 86.0], [152.0, 86.0], [112.0, 158.0]])
-        if np.linalg.norm(left_eye - right_eye) < 8.0:
+        try:
+            transform = build_face_alignment_transform(left_eye, right_eye, mouth)
+        except ValueError:
             return None, points
-        transform = cv2.getAffineTransform(source, target)
         aligned = cv2.warpAffine(
             pro_frame, transform, (224, 224),
             flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT_101,
@@ -554,7 +579,7 @@ class GazeAwareADAS:
         return aligned, points
 
     def estimate_face_origin_pro(self, face_box):
-        """Calcula el centro 3D del rostro usando profundidad RGB-D interior."""
+        """Estimate the 3D face center from driver-facing RGB-D depth."""
         if self.last_pro_depth_frame is None:
             return None
         x1, y1, x2, y2 = face_box
@@ -574,17 +599,22 @@ class GazeAwareADAS:
         return np.array([x, y, z], dtype=np.float64)
 
     def project_gaze_to_lr(self, gaze_angles, depth_frame=None, origin_pro=None):
-        """Transform a PRO-frame gaze ray into the LR image using R, T and depth."""
+        """Transform model ray -> PRO ray -> LR ray and project it.
+
+        Returns ``(None, direction_lr)`` for invalid geometry. It never invents
+        a center point or clips an out-of-FOV ray onto an image border.
+        """
         yaw, pitch = gaze_angles
-        direction_pro = np.array([
-            math.sin(yaw) * math.cos(pitch),
-            math.sin(pitch),
-            math.cos(yaw) * math.cos(pitch),
-        ], dtype=np.float64)
+        direction_model = model_angles_to_direction(yaw, pitch)
+        if self.R_pro_from_model is None:
+            self.last_projection_status = "missing-model-to-pro-calibration"
+            return None, np.full(3, np.nan, dtype=np.float64)
+        direction_pro = self.R_pro_from_model @ direction_model
         direction_lr = self.R_lr_from_pro @ direction_pro
         norm = np.linalg.norm(direction_lr)
         if norm < 1e-9 or direction_lr[2] <= 1e-6:
-            return (self.frame_width // 2, self.frame_height // 2), direction_lr
+            self.last_projection_status = "ray-behind-lr-camera"
+            return None, direction_lr
         direction_lr /= norm
         if origin_pro is None:
             origin_pro = np.zeros(3, dtype=np.float64)
@@ -592,19 +622,23 @@ class GazeAwareADAS:
         origin_lr = self.R_lr_from_pro @ np.asarray(origin_pro, dtype=np.float64) + self.T_lr_from_pro_m
 
         target_depth = 10.0
-        u, v = self.frame_width // 2, self.frame_height // 2
+        projected_point = None
         for _ in range(2):
             ray_scale = (target_depth - origin_lr[2]) / direction_lr[2]
             if ray_scale <= 0:
-                break
+                self.last_projection_status = "intersection-behind-origin"
+                return None, direction_lr
             point_lr = origin_lr + ray_scale * direction_lr
             if point_lr[2] <= 1e-6:
-                break
+                self.last_projection_status = "intersection-behind-lr-camera"
+                return None, direction_lr
             projected = self.K_lr @ point_lr
             u = int(round(projected[0] / projected[2]))
             v = int(round(projected[1] / projected[2]))
-            u = max(0, min(self.frame_width - 1, u))
-            v = max(0, min(self.frame_height - 1, v))
+            if not (0 <= u < self.frame_width and 0 <= v < self.frame_height):
+                self.last_projection_status = "ray-outside-lr-fov"
+                return None, direction_lr
+            projected_point = (u, v)
             if depth_frame is not None:
                 x1, x2 = max(0, u - 5), min(self.frame_width, u + 6)
                 y1, y2 = max(0, v - 5), min(self.frame_height, v + 6)
@@ -612,7 +646,11 @@ class GazeAwareADAS:
                 valid = valid[valid > 0]
                 if valid.size:
                     target_depth = float(np.median(valid) / 1000.0)
-        return (u, v), direction_lr
+        if projected_point is None:
+            self.last_projection_status = "no-valid-intersection"
+            return None, direction_lr
+        self.last_projection_status = "ok"
+        return projected_point, direction_lr
 
     def smooth_gaze_point(self, gaze_point):
         """Apply the causal EMA used by both the ADAS decision and the UI."""
@@ -625,7 +663,7 @@ class GazeAwareADAS:
             int(alpha * gaze_point[0] + (1.0 - alpha) * prev_x),
             int(alpha * gaze_point[1] + (1.0 - alpha) * prev_y),
         )
-    
+
     def calculate_error(self, gaze_point, click_point):
         """Calculate Euclidean distance error in pixels."""
         dx = gaze_point[0] - click_point[0]
@@ -674,7 +712,7 @@ class GazeAwareADAS:
         return float(math.degrees(angle_rad))
     
     def calculate_nss(self, gaze_point, click_point):
-        """Calcula NSS sobre un mapa gaussiano de sigma = 22 px."""
+        """Compute NSS on a Gaussian map with sigma = 22 px."""
         h, w = self.frame_height, self.frame_width
         sigma = 22.0
 
@@ -713,7 +751,6 @@ class GazeAwareADAS:
         self.test_samples.append(sample)
         self.current_session.append(sample)
         
-        # Update model statistics
         stats = self.model_stats[model_name]
         stats['samples'] += 1
         stats['total_error'] += error
@@ -725,7 +762,7 @@ class GazeAwareADAS:
         return error
 
     def save_lr_frame_for_yolo_dataset(self, frame=None):
-        """Guarda un frame LR sin etiquetas para construir el dataset de validación YOLO."""
+        """Save an unlabeled LR frame for the YOLO validation dataset."""
         try:
             if frame is None:
                 frame = self.last_frame
@@ -746,10 +783,10 @@ class GazeAwareADAS:
             return None
     
     def process_detections(self, boxes, cls_ids, masks_xy, names, lr_frame, gaze_point):
-        """Calcula distancia, categoría, carril, mirada y TTC por detección."""
+        """Compute distance, category, lane, gaze, and TTC for each detection."""
         current_time = time.time()
         
-        # Reinicia los conteos del frame actual.
+        # Reset counters for the current frame.
         self.current_counts = {
             'reliable_stereo': 0,
             'far_stereo': 0,
@@ -768,12 +805,12 @@ class GazeAwareADAS:
         frame_has_preliminary_risk = False
         frame_has_ttc_positive = False
         
-        # 1. First Pass: Estimate depth and collect detections
+        # Estimate depth and collect detections.
         for i, box in enumerate(boxes):
             class_id = int(cls_ids[i])
             obj_name = names[class_id].upper()
             
-            # Mapea las clases a las categorías evaluadas.
+            # Map detector classes to the evaluated categories.
             category = None
             if obj_name == "PERSON":
                 category = "persona"
@@ -787,13 +824,13 @@ class GazeAwareADAS:
                 category = "motocicleta"
                 
             if category is None:
-                continue # Skip non-critical objects
+                continue
                 
             x1_b, y1_b, x2_b, y2_b = box
             cx = (x1_b + x2_b) / 2.0
             cy = (y1_b + y2_b) / 2.0
             
-            # Estima profundidad en el centroide.
+            # Estimate depth at the detection centroid.
             depth_m = None
             if self.last_depth_frame is not None:
                 center_x = max(0, min(self.frame_width - 1, int(round(cx))))
@@ -823,7 +860,7 @@ class GazeAwareADAS:
         if frame_has_preliminary_risk:
             self.risk_condition_frames += 1
             
-        # Asocia objetos entre frames para calcular TTC.
+        # Associate objects across frames for TTC estimation.
         new_tracked_objects = {}
         for det in current_detections:
             best_match_id = None
@@ -879,7 +916,7 @@ class GazeAwareADAS:
             
         self.tracked_objects = new_tracked_objects
         
-        # 3. Third Pass: Classify, Filter by Lane, Gaze, and sound Alarm
+        # Apply lane, gaze, and warning conditions.
         lane_half_width_m = 1.75
         
         for det in current_detections:
@@ -888,13 +925,13 @@ class GazeAwareADAS:
             box = det['box']
             x1_b, y1_b, x2_b, y2_b = box
             
-            # Cuenta intervalos de distancia.
+            # Count depth-range observations.
             if depth_val <= 30.0:
                 self.current_counts['reliable_stereo'] += 1
             else:
                 self.current_counts['far_stereo'] += 1
                 
-            # Cuenta categorías.
+            # Count object categories.
             self.current_counts[category] += 1
             if self.vehicle_moving:
                 self.total_detections_while_moving += 1
@@ -908,8 +945,7 @@ class GazeAwareADAS:
             else:
                 in_lane = False
             
-            # Comprueba si la mirada intersecta el objeto.
-            # Check bounding box first
+            # Test the bounding box before the more precise instance mask.
             gaze_in_box = (x1_b <= gaze_point[0] <= x2_b and y1_b <= gaze_point[1] <= y2_b)
             gaze_in_mask = False
             
@@ -925,11 +961,11 @@ class GazeAwareADAS:
             if in_lane:
                 self.current_counts['lane_total'] += 1
                 
-                # Registra objetos del carril no observados.
+                # Count unattended objects in the lane corridor.
                 if not driver_saw_it:
                     self.current_counts['lane_unseen'] += 1
                     
-                # Evalúa el umbral crítico de TTC.
+                # Evaluate the critical TTC threshold.
                 ttc = det['ttc']
                 if (
                     self.vehicle_moving
@@ -939,28 +975,26 @@ class GazeAwareADAS:
                     frame_has_ttc_positive = True
                     self.current_counts['lane_critical_ttc'] += 1
                     self.ttc_positive_records += 1
-                    # Activa alarma solamente si el conductor no observa el objeto.
+                    # Warn only when the driver is not looking at the object.
                     if not driver_saw_it:
                         danger_in_lane = True
                         self.unattended_ttc_positive_records += 1
                         
-            # Visual output: Draw bounding box and text
-            # Draw standard boxes
+            # Draw detection state using the warning color convention.
             if in_lane:
                 if not driver_saw_it:
                     # Not seen and in lane -> Orange or Red depending on TTC
-                    color = (0, 0, 255) if det['ttc'] <= self.ttc_threshold else (0, 165, 255) # Red vs Orange
+                    color = (0, 0, 255) if det['ttc'] <= self.ttc_threshold else (0, 165, 255)
                     thickness = 3
                 else:
-                    color = (0, 255, 0) # Green (safe, driver is looking)
+                    color = (0, 255, 0)
                     thickness = 2
             else:
-                color = (150, 150, 150) # Gray (outside lane)
+                color = (150, 150, 150)
                 thickness = 1
                 
             cv2.rectangle(lr_frame, (int(x1_b), int(y1_b)), (int(x2_b), int(y2_b)), color, thickness)
             
-            # Text label
             label = f"{det['obj_name']}"
             if depth_val < 900.0:
                 label += f" {depth_val:.1f}m"
@@ -973,12 +1007,12 @@ class GazeAwareADAS:
             cv2.putText(lr_frame, label, (int(x1_b), int(y1_b) - 6),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
                         
-            # Highlight mask if looked at
+            # Highlight the attended instance mask.
             if driver_saw_it and masks_xy is not None:
                 poly = masks_xy[det['mask_idx']].astype(np.int32)
                 if len(poly) > 0:
                     obj_overlay = lr_frame.copy()
-                    cv2.fillPoly(obj_overlay, [poly], (0, 255, 0)) # Green overlay if looked at
+                    cv2.fillPoly(obj_overlay, [poly], (0, 255, 0))
                     cv2.addWeighted(obj_overlay, 0.4, lr_frame, 0.6, 0, lr_frame)
                     
         if frame_has_ttc_positive:
@@ -988,7 +1022,7 @@ class GazeAwareADAS:
         return lr_frame, danger_in_lane
 
     def _msg_timestamp_seconds(self, msg):
-        """Obtiene timestamp del mensaje DepthAI en segundos; si falla, usa reloj local."""
+        """Return a DepthAI timestamp in seconds, falling back to the host clock."""
         try:
             ts = msg.getTimestamp()
             if hasattr(ts, 'total_seconds'):
@@ -998,7 +1032,7 @@ class GazeAwareADAS:
             return time.perf_counter()
 
     def update_camera_fps(self, camera_name, msg):
-        """Calcula FPS efectivo de un stream de cámara usando timestamps de DepthAI."""
+        """Compute effective camera FPS from DepthAI message timestamps."""
         wall_now = time.perf_counter()
         if self._camera_first_wall_time[camera_name] is None:
             self._camera_first_wall_time[camera_name] = wall_now
@@ -1024,7 +1058,7 @@ class GazeAwareADAS:
         )
 
     def get_total_camera_fps(self, camera_name):
-        """FPS promedio de toda la sesión para cada cámara."""
+        """Return the full-session average FPS for a camera."""
         first_t = self._camera_first_wall_time.get(camera_name)
         last_t = self._camera_last_wall_time.get(camera_name)
         count = self.camera_frame_count.get(camera_name, 0)
@@ -1033,7 +1067,7 @@ class GazeAwareADAS:
         return (count - 1) / (last_t - first_t)
 
     def update_fps(self):
-        """Calcula FPS real del ciclo principal y lo imprime 1 vez por segundo."""
+        """Compute main-loop FPS and print it once per second."""
         now = time.perf_counter()
         dt = now - self._fps_last_time
         self._fps_last_time = now
@@ -1044,7 +1078,7 @@ class GazeAwareADAS:
             self.avg_fps = sum(self.fps_history) / len(self.fps_history)
             self.fps_frame_count += 1
 
-        # Evita saturar la consola: solo imprime una vez por segundo
+        # Limit console output to one update per second.
         if now - self._fps_last_print >= 1.0:
             print(
                 f"⚡ FPS programa: {self.avg_fps:.1f} | "
@@ -1057,7 +1091,7 @@ class GazeAwareADAS:
         """Draw minimal clean UI"""
         h, w = frame.shape[:2]
 
-        # ── FPS real del programa y de cada cámara ──
+        # Main-loop and camera-stream FPS.
         fps_text = (
             f"FPS Prog:{getattr(self, 'avg_fps', 0.0):.1f} "
             f"LR:{self.camera_avg_fps.get('LR', 0.0):.1f} "
@@ -1066,51 +1100,58 @@ class GazeAwareADAS:
         cv2.putText(frame, fps_text, (w - 300, 24),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.50, (0, 255, 255), 2)
         
-        # ── Gaussian Heatmap en el punto de mirada ──
-        x1 = gaze_point[0] - self.hm_radius
-        y1 = gaze_point[1] - self.hm_radius
-        x2 = x1 + self.hm_size
-        y2 = y1 + self.hm_size
-        hx1, hy1 = 0, 0
-        hx2, hy2 = self.hm_size, self.hm_size
-        if x1 < 0:  hx1 = -x1;          x1 = 0
-        if y1 < 0:  hy1 = -y1;          y1 = 0
-        if x2 > w:  hx2 = self.hm_size - (x2 - w); x2 = w
-        if y2 > h:  hy2 = self.hm_size - (y2 - h); y2 = h
-        if x1 < x2 and y1 < y2:
-            roi      = frame[y1:y2, x1:x2]
-            hm_roi   = self.heatmap_color[hy1:hy2, hx1:hx2]
-            alpha    = self.heatmap_alpha[hy1:hy2, hx1:hx2]
-            frame[y1:y2, x1:x2] = (hm_roi * alpha + roi * (1.0 - alpha)).astype(np.uint8)
-        
-        # ── Crosshair en el punto de mirada ──
-        cv2.circle(frame, gaze_point, 2, (255, 255, 255), -1)
-        cv2.line(frame, (gaze_point[0]-50, gaze_point[1]), (gaze_point[0]+50, gaze_point[1]), (0, 255, 0), 1)
-        cv2.line(frame, (gaze_point[0], gaze_point[1]-50), (gaze_point[0], gaze_point[1]+50), (0, 255, 0), 1)
-        
-        # El carril se evalúa en coordenadas métricas para cada objeto. Una
-        # banda fija en píxeles sería inconsistente con la perspectiva.
+        if self.gaze_valid:
+            # Gaussian heatmap centered on the gaze point.
+            x1 = gaze_point[0] - self.hm_radius
+            y1 = gaze_point[1] - self.hm_radius
+            x2 = x1 + self.hm_size
+            y2 = y1 + self.hm_size
+            hx1, hy1 = 0, 0
+            hx2, hy2 = self.hm_size, self.hm_size
+            if x1 < 0:  hx1 = -x1;          x1 = 0
+            if y1 < 0:  hy1 = -y1;          y1 = 0
+            if x2 > w:  hx2 = self.hm_size - (x2 - w); x2 = w
+            if y2 > h:  hy2 = self.hm_size - (y2 - h); y2 = h
+            if x1 < x2 and y1 < y2:
+                roi = frame[y1:y2, x1:x2]
+                hm_roi = self.heatmap_color[hy1:hy2, hx1:hx2]
+                alpha = self.heatmap_alpha[hy1:hy2, hx1:hx2]
+                frame[y1:y2, x1:x2] = (
+                    hm_roi * alpha + roi * (1.0 - alpha)
+                ).astype(np.uint8)
+
+            # Gaze-point crosshair.
+            cv2.circle(frame, gaze_point, 2, (255, 255, 255), -1)
+            cv2.line(frame, (gaze_point[0]-50, gaze_point[1]), (gaze_point[0]+50, gaze_point[1]), (0, 255, 0), 1)
+            cv2.line(frame, (gaze_point[0], gaze_point[1]-50), (gaze_point[0], gaze_point[1]+50), (0, 255, 0), 1)
+        else:
+            cv2.putText(
+                frame, f"RAYO INVALIDO: {self.last_projection_status}", (10, h - 32),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 0, 255), 1,
+            )
+
+        # Evaluate the lane in metric coordinates; a fixed pixel band would
+        # be inconsistent with perspective.
         cv2.putText(frame, "Carril fisico: +/-1.75 m", (10, 24),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
         
-        # ── Nombre del modelo (pequeño, esquina inferior-derecha) ──
+        # Model name in the lower-right corner.
         cv2.putText(frame, self.current_model_name, (w - 180, h - 8),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.38, (160, 160, 160), 1)
         
-        # ── Objeto interceptado por la mirada ──
+        # Object intersected by the gaze ray.
         objeto = getattr(self, 'current_looking_at', 'Fondo / Calle')
         if objeto not in ('Fondo', 'Fondo / Calle'):
             cv2.putText(frame, objeto, (10, h - 8),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 200, 255), 2)
         
-        # ── Distancia al punto de mirada ──
+        # Depth at the gaze point.
         depth = getattr(self, 'current_depth_m', 0.0)
-        if depth > 0:
+        if self.gaze_valid and depth > 0:
             cv2.putText(frame, f"{depth:.1f}m", (gaze_point[0] + 12, gaze_point[1] - 12),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
         
-        # ── Dashboard Overlay en Esquina Superior Izquierda ──
-        # Fondo semitransparente oscuro
+        # Semi-transparent status panel.
         panel_w = 220
         panel_h = 175
         panel_overlay = frame.copy()
@@ -1118,36 +1159,34 @@ class GazeAwareADAS:
         cv2.addWeighted(panel_overlay, 0.75, frame, 0.25, 0, frame)
         cv2.rectangle(frame, (5, 5), (5 + panel_w, 5 + panel_h), (80, 80, 80), 1)
         
-        # Estado del vehículo
+        # Vehicle motion state.
         v_state = "MOVIMIENTO" if self.vehicle_moving else "DETENIDO"
         v_color = (0, 255, 0) if self.vehicle_moving else (0, 0, 255)
         cv2.putText(frame, f"Vehiculo: {v_state}", (12, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.42, v_color, 1)
         cv2.putText(frame, f"Magnitud: {self.motion_magnitude:.2f}", (12, 36), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (200, 200, 200), 1)
         
-        # Línea divisoria
         cv2.line(frame, (10, 42), (panel_w, 42), (100, 100, 100), 1)
         
-        # Rangos Estéreo
+        # Stereo-depth ranges.
         cv2.putText(frame, f"Estereo Fiable (<=30m): {self.current_counts.get('reliable_stereo', 0)}", (12, 56), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (255, 255, 0), 1)
         cv2.putText(frame, f"Estereo Lejano (>30m): {self.current_counts.get('far_stereo', 0)}", (12, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (0, 165, 255), 1)
         
-        # Categorías
+        # Object categories.
         cat_text = f"P:{self.current_counts.get('persona', 0)} | V:{self.current_counts.get('vehiculo', 0)} | C:{self.current_counts.get('camion_bus', 0)} | B:{self.current_counts.get('bicicleta', 0)} | M:{self.current_counts.get('motocicleta', 0)}"
         cv2.putText(frame, "Categorias:", (12, 85), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (200, 200, 200), 1)
         cv2.putText(frame, cat_text, (12, 98), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 255, 255), 1)
         
-        # Línea divisoria
         cv2.line(frame, (10, 104), (panel_w, 104), (100, 100, 100), 1)
         
-        # Carril
+        # Lane statistics.
         cv2.putText(frame, f"Total en carril: {self.current_counts.get('lane_total', 0)}", (12, 118), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (255, 255, 255), 1)
         cv2.putText(frame, f"No vistos en carril: {self.current_counts.get('lane_unseen', 0)}", (12, 132), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (0, 165, 255), 1)
         cv2.putText(frame, f"TTC <= 2s en carril: {self.current_counts.get('lane_critical_ttc', 0)}", (12, 146), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (0, 0, 255), 1)
         
-        # Umbral alarma
+        # Warning threshold.
         cv2.putText(frame, f"Alarma TTC Activa: {'SI' if self.alarm_active else 'NO'}", (12, 162), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (0, 0, 255) if self.alarm_active else (150, 150, 150), 1)
         
-        # ── Alarma: solo recuadro rojo parpadeante, sin texto ──
+        # Flash a red border while a warning is active.
         if getattr(self, 'alarm_active', False):
             if int(time.time() * 5) % 2 == 0:
                 cv2.rectangle(frame, (0, 0), (w - 1, h - 1), (0, 0, 255), 6)
@@ -1155,7 +1194,7 @@ class GazeAwareADAS:
         return frame
     
     def generate_report(self):
-        """Genera el reporte de validación y funcionamiento."""
+        """Generate the validation and runtime report."""
         has_gaze_samples = bool(self.test_samples)
         has_alarm_data = self.total_frames_processed > 0
         if not has_gaze_samples and not has_alarm_data:
@@ -1224,7 +1263,6 @@ class GazeAwareADAS:
                     'pct_good_nss': float(np.mean(nss_scores > 1.0) * 100)
                 }
         
-        # Alarm efficiency metrics
         alarm_metrics = {
             'total_frames_processed': self.total_frames_processed,
             'risk_condition_frames': self.risk_condition_frames,
@@ -1241,7 +1279,6 @@ class GazeAwareADAS:
         report['alarm_metrics'] = alarm_metrics
         report['alarm_events']  = self.alarm_events
         
-        # ADAS & Motion Metrics
         adas_metrics = {
             'moving_frames_count': self.moving_frames_count,
             'total_detections_while_moving': self.total_detections_while_moving,
@@ -1252,7 +1289,7 @@ class GazeAwareADAS:
         }
         report['adas_metrics'] = adas_metrics
 
-        # FPS metrics. Estos valores se guardan cuando se presiona 'r' o al cerrar.
+        # FPS values are saved when the user presses 'r' or exits.
         fps_metrics = {
             'program_fps_recent_avg': round(float(getattr(self, 'avg_fps', 0.0)), 2),
             'camera_lr_fps_recent_avg': round(float(self.camera_avg_fps.get('LR', 0.0)), 2),
@@ -1265,7 +1302,6 @@ class GazeAwareADAS:
         }
         report['fps_metrics'] = fps_metrics
         
-        # Save report
         if not self.args.save_reports:
             print("Reporte calculado en memoria; no se guardó (--save-reports para habilitarlo).")
             return report
@@ -1274,7 +1310,6 @@ class GazeAwareADAS:
         with open(report_path, 'w') as f:
             json.dump(report, f, indent=2)
         
-        # Print summary
         print("\n" + "="*60)
         print("📊 INFORME DE VALIDACIÓN GAZE-AWARE ADAS")
         print("="*60)
@@ -1339,7 +1374,7 @@ class GazeAwareADAS:
         print(f"📄 Reporte guardado en: {report_path}")
     
     def run(self):
-        """Bucle principal del ADAS en tiempo real."""
+        """Run the real-time ADAS processing loop."""
         print("🚀 Iniciando Gaze-Aware Stereo Vision ADAS...")
         print("📋 Controles:")
         print("   ESPACIO - Capturar punto de mirada")
@@ -1365,10 +1400,8 @@ class GazeAwareADAS:
         
         try:
             while True:
-                # Check for keypress first
                 key = cv2.waitKey(30) & 0xFF
                 
-                # Handle keys immediately
                 if key == ord('q'):
                     break
                 elif key == ord('v'):
@@ -1394,7 +1427,7 @@ class GazeAwareADAS:
                     else:
                         self.click_point = None
                 
-                # Handle pause state - just show last frame
+                # While paused, continue displaying the last frame.
                 if self.is_paused:
                     if self.last_frame is not None:
                         paused_frame = self.draw_ui(self.last_frame.copy(), self.last_gaze_point)
@@ -1404,7 +1437,6 @@ class GazeAwareADAS:
                         cv2.imshow("Gaze-Aware Stereo Vision ADAS", paused_frame)
                     continue
                 
-                # Get frames (normal operation)
                 if self.lr_queue is None or self.pro_queue is None:
                     print("❌ Cámaras no inicializadas. Conecta los dispositivos OAK-D y reinicia.")
                     break
@@ -1413,10 +1445,9 @@ class GazeAwareADAS:
                 pro_frame = None
                 face_detections = None
                 
-                # --- T0: Captura de frame del conductor ---
+                # T0: driver-frame capture.
                 t0_capture = time.perf_counter()
 
-                # LR frame
                 lr_data = self.lr_queue.get()
                 self.update_camera_fps('LR', lr_data)
                 lr_frame = lr_data.getCvFrame()
@@ -1466,12 +1497,10 @@ class GazeAwareADAS:
                 if self.vehicle_moving:
                     self.moving_frames_count += 1
                 
-                # Depth frame
                 depth_data = self.depth_queue.tryGet()
                 if depth_data:
                     self.last_depth_frame = depth_data.getFrame()
 
-                # Pro frame and face detections
                 pro_data = self.pro_queue.get()
                 self.update_camera_fps('Pro', pro_data)
                 pro_frame = pro_data.getCvFrame()
@@ -1483,8 +1512,10 @@ class GazeAwareADAS:
                 if face_data:
                     face_detections = face_data.detections
                 
-                # Process face and predict gaze
-                gaze_point = (320, 180)  # Default center
+                # Process the face and predict gaze.
+                gaze_point = self.last_gaze_point
+                self.gaze_valid = False
+                self.last_projection_status = "no-face-detection"
                 
                 if face_detections and len(face_detections) > 0:
                     self.face_candidate_frames += 1
@@ -1501,44 +1532,59 @@ class GazeAwareADAS:
                         self.face_origin_pro = self.estimate_face_origin_pro(face_box)
                         if face_crop is not None:
                             self.landmark_valid_frames += 1
+                            face_preview = cv2.flip(face_crop, 1)
+                            cv2.putText(
+                                face_preview, "Landmarks OK", (5, 20),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1,
+                            )
+                            cv2.imshow("NN Input (Face + Vector)", face_preview)
+                            self.last_projection_status = "waiting-face-depth"
+                        else:
+                            self.last_projection_status = "invalid-face-landmarks"
                         if self.face_origin_pro is not None:
                             self.rgbd_face_depth_valid_frames += 1
+                        elif face_crop is not None:
+                            self.last_projection_status = "invalid-face-depth"
                         if face_crop is not None and self.face_origin_pro is not None:
                             # Normalize the model output to (yaw, pitch) and image-axis sign.
                             swap_axes = self.current_model_config.get('swap_axes', False)
                             invert_y = self.current_model_config.get('invert_y', False)
-                            # --- T1: Inicio de inferencia del modelo gaze ---
+                            # T1: gaze-inference start.
                             t1_gaze_start = time.perf_counter()
                             gaze_angles = self.predict_gaze(face_crop, self.current_model, swap_axes=swap_axes, invert_y=invert_y)
                             t2_gaze_end = time.perf_counter()
-                            gaze_point, gaze_direction_lr = self.project_gaze_to_lr(
+                            projected_gaze_point, gaze_direction_lr = self.project_gaze_to_lr(
                                 gaze_angles, self.last_depth_frame, self.face_origin_pro
                             )
-                            # The ADAS decision, UI and reported metrics use the same filtered gaze.
-                            gaze_point = self.smooth_gaze_point(gaze_point)
+                            self.gaze_valid = projected_gaze_point is not None
+                            if self.gaze_valid:
+                                # ADAS, UI and metrics use the same filtered gaze.
+                                gaze_point = self.smooth_gaze_point(projected_gaze_point)
                             
-                            # Integración de YOLOv8 Segmentación (Mapeo de la mirada al objeto)
-                            self.current_looking_at = "Fondo / Calle"
+                            # Run YOLOv8 segmentation and gaze-to-object mapping.
+                            self.current_looking_at = (
+                                "Fondo / Calle" if self.gaze_valid else "Rayo inválido"
+                            )
                             danger_in_lane = False
-                            if self.yolo_model is not None:
+                            if self.yolo_model is not None and self.gaze_valid:
                                 results = self.yolo_model(lr_frame, conf=0.5, verbose=False)
                                 if len(results) > 0:
-                                    # Obtener el frame solo con las máscaras (sin nombres ni cajas)
+                                    # Render masks without labels or boxes.
                                     yolo_annotated = results[0].plot(labels=False, boxes=False)
                                     lr_frame = yolo_annotated
                                     
-                                    # Verificar si la mirada cae dentro de un objeto segmentado
+                                    # Check whether the gaze point intersects an instance mask.
                                     if results[0].boxes is not None and results[0].masks is not None:
                                         boxes = results[0].boxes.xyxy.cpu().numpy()
                                         cls_ids = results[0].boxes.cls.cpu().numpy()
                                         masks_xy = results[0].masks.xy
                                         names = self.yolo_model.names
                                         
-                                        # Buscar de atrás hacia adelante (los objetos más pequeños/frente suelen estar al final)
+                                        # Traverse in reverse display order to resolve overlapping masks.
                                         for i, box in reversed(list(enumerate(boxes))):
                                             x1, y1, x2, y2 = box
                                             if x1 <= gaze_point[0] <= x2 and y1 <= gaze_point[1] <= y2:
-                                                # Verificación precisa de intersección usando la silueta exacta (polígono)
+                                                # Use the instance polygon for the precise intersection test.
                                                 poly = masks_xy[i].astype(np.int32)
                                                 if len(poly) > 0:
                                                     inside = cv2.pointPolygonTest(poly, (float(gaze_point[0]), float(gaze_point[1])), False)
@@ -1546,7 +1592,7 @@ class GazeAwareADAS:
                                                         self.current_looking_at = names[int(cls_ids[i])].upper()
                                                         break
                                         
-                                        # Procesar conteos, carril, mirada, RANSAC, y TTC
+                                        # Update detection, lane, gaze, motion, and TTC state.
                                         lr_frame, danger_in_lane = self.process_detections(
                                             boxes, cls_ids, masks_xy, names, lr_frame, gaze_point
                                         )
@@ -1557,7 +1603,7 @@ class GazeAwareADAS:
                             else:
                                 self.current_counts = {k: 0 for k in self.current_counts}
 
-                            # Ejecutar Alarma Sonora si hay peligro y ha pasado el cooldown
+                            # Emit an audible warning after the cooldown expires.
                             self.total_frames_processed += 1
                             if danger_in_lane:
                                 self.frames_with_danger += 1
@@ -1579,14 +1625,14 @@ class GazeAwareADAS:
                                     'beep_emitted': should_beep,
                                 })
                                 if should_beep:
-                                    # --- T3: Alarma disparada ---
+                                    # T3: warning activation.
                                     t3_alarm = time.perf_counter()
                                     if winsound is not None:
                                         winsound.Beep(1000, 200)
                                     self.last_alarm_time = current_time
                                     self.alarm_trigger_count += 1
                                     
-                                    # Calcular latencia total pipeline (ms)
+                                    # Compute total pipeline latency in milliseconds.
                                     latency_ms = (t3_alarm - self.previous_frame_input_time) * 1000 if self.previous_frame_input_time is not None else 0.0
                                     gaze_latency_ms = (t2_gaze_end - t1_gaze_start) * 1000
                                     
@@ -1594,55 +1640,55 @@ class GazeAwareADAS:
                             else:
                                 self.alarm_active = False
                             
-                            # Show face input to NN with gaze vector overlay
-                            # Flip the face crop horizontally to remove mirror effect
+                            # Preserve the validated debug orientation for the gaze overlay.
                             face_debug = cv2.flip(face_crop, 1)
                             h_face, w_face = face_debug.shape[:2]
                             
-                            # Draw gaze vector on face image (normalized coordinates to face size)
-                            # Conserva la convención horizontal del modelo.
+                            # Draw the gaze vector in normalized face coordinates.
+                            # Preserve the model's horizontal-axis convention.
                             gaze_x_face = int(w_face / 2 - math.sin(gaze_angles[0]) * w_face / 2)
                             gaze_y_face = int(h_face / 2 - math.sin(gaze_angles[1]) * h_face / 2)
                             
-                            # Center of face
                             center_x, center_y = w_face // 2, h_face // 2
                             
-                            # Draw line from center to gaze point
                             cv2.line(face_debug, (center_x, center_y), (gaze_x_face, gaze_y_face), (0, 255, 0), 2)
                             cv2.circle(face_debug, (gaze_x_face, gaze_y_face), 5, (0, 0, 255), -1)
                             cv2.circle(face_debug, (center_x, center_y), 3, (255, 0, 0), -1)
                             
-                            # Show model input
                             cv2.putText(face_debug, f"Input: {face_crop.shape[1]}x{face_crop.shape[0]}", (5, 20),
                                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
                             cv2.putText(face_debug, f"Yaw/Pitch: ({math.degrees(gaze_angles[0]):.1f}, {math.degrees(gaze_angles[1]):.1f}) deg", (5, 40),
                                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
                             
-                            # Show the NN input window
                             cv2.imshow("NN Input (Face + Vector)", face_debug)
                             self.last_face_debug = face_debug.copy()
+                    else:
+                        self.last_projection_status = "invalid-face-box"
                             
 
                 self.last_gaze_point = gaze_point
                 if lr_frame is not None:
                     self.last_frame = lr_frame.copy()
                 
-                # Actualizar FPS real antes de dibujar la interfaz
+                # Update measured FPS before rendering the UI.
                 self.update_fps()
 
-                # Draw UI
                 display_frame = self.draw_ui(lr_frame.copy(), gaze_point)
                 
-                # Show frame
                 cv2.imshow("Gaze-Aware Stereo Vision ADAS", display_frame)
+                # Keep the complete driver-facing stream visible even when no
+                # valid face/depth pair is available for gaze inference.
+                pro_display = pro_frame.copy()
+                cv2.putText(pro_display, "OAK-D Pro - Conductor", (12, 28),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                cv2.imshow("OAK-D Pro - Conductor", pro_display)
                 self.previous_frame_input_time = t0_capture
 
-                # Grabar frame al video
+                # Write the processed frame to the video stream.
                 if is_recording and video_writer is not None:
                     video_writer.write(display_frame)
                     frame_count += 1
                 
-                # Handle ESC key to cancel click
                 if key == 27 and self.waiting_for_click:
                     self.waiting_for_click = False
                     self.click_point = None
@@ -1652,20 +1698,19 @@ class GazeAwareADAS:
             print("\n🛑 Programa interrumpido")
         
         finally:
-            # Cleanup
             if self.device_lr:
                 self.device_lr.close()
             if self.device_pro:
                 self.device_pro.close()
             cv2.destroyAllWindows()
             
-            # Guardar video
+            # Finalize video output.
             if video_writer is not None:
                 video_writer.release()
             elapsed_time = time.time() - start_time
             actual_fps = frame_count / elapsed_time if elapsed_time > 0 else 0
             processing_fps = self.fps_frame_count / elapsed_time if elapsed_time > 0 else 0
-            video_duration = frame_count / 30.0  # Duración basada en 30 FPS
+            video_duration = frame_count / 30.0  # Duration at the configured 30 FPS.
             if video_writer is not None:
                 print(f"🎥 Video guardado en: {video_path}")
                 print(f"📊 Estadísticas de grabación:")
@@ -1679,41 +1724,40 @@ class GazeAwareADAS:
             if video_writer is not None:
                 print(f"   Duración del video: {video_duration:.2f}s")
             
-            # Generate final report
             if self.args.save_reports:
                 self.generate_report()
     
     def generate_heatmap_capture(self, frame, pred_point, click_point):
-        """Genera una imagen especial para la captura con mapas de calor resaltados"""
+        """Generate a capture image with highlighted prediction and reference heatmaps."""
         h, w = frame.shape[:2]
         
         Y, X = np.mgrid[0:h, 0:w]
-        sigma = 55.0  # Amplio para que el mapa se extienda bastante
+        sigma = 55.0
         
-        # Gaussianas
+        # Prediction and reference Gaussians.
         gauss_pred = np.exp(-((X - pred_point[0])**2 + (Y - pred_point[1])**2) / (2 * sigma**2))
         gauss_click = np.exp(-((X - click_point[0])**2 + (Y - click_point[1])**2) / (2 * sigma**2))
         
-        # Combinar ambas
+        # Combine both heatmaps.
         saliency = np.maximum(gauss_pred, gauss_click)
         
-        # Color map. Usamos COLORMAP_TURBO si existe (empieza en morado oscuro), si no JET
+        # Prefer TURBO when available and fall back to JET.
         cmap = getattr(cv2, 'COLORMAP_TURBO', cv2.COLORMAP_JET)
         
         saliency_8u = (saliency * 255).astype(np.uint8)
         heatmap_color = cv2.applyColorMap(saliency_8u, cmap)
         
-        # Mezclar: fondo oscuro/tibio y puntos brillantes
+        # Blend a subdued background with bright heatmap peaks.
         alpha_map = saliency * 0.7 + 0.3
         alpha_map = np.expand_dims(alpha_map, axis=2)
         
-        # Fondo oscurecido ("imagen por detras tibia")
+        # Darken the background before applying the heatmap.
         bg_tinted = frame.copy()
         bg_tinted = cv2.addWeighted(bg_tinted, 0.5, np.zeros_like(bg_tinted), 0.5, 0)
         
         overlay = (heatmap_color * alpha_map + bg_tinted * (1.0 - alpha_map)).astype(np.uint8)
         
-        # Dibujar marcadores
+        # Draw prediction and reference markers.
         cv2.circle(overlay, pred_point, 5, (255, 255, 255), -1)
         cv2.putText(overlay, "Prediccion", (pred_point[0] + 10, pred_point[1] - 10), 
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
@@ -1722,10 +1766,9 @@ class GazeAwareADAS:
         cv2.putText(overlay, "Click GT", (click_point[0] + 10, click_point[1] + 20), 
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
                     
-        # Línea de error
+        # Connect the prediction and reference points.
         cv2.line(overlay, pred_point, click_point, (0, 255, 0), 2)
         
-        # Error text
         error_dist = self.calculate_error(pred_point, click_point)
         angular_error = self.calculate_angular_error(pred_point, click_point)
         cv2.putText(overlay, f"Error: {error_dist:.1f}px | {angular_error:.2f} deg", (10, 30),
@@ -1736,15 +1779,18 @@ class GazeAwareADAS:
     def mouse_callback(self, event, x, y, flags, param):
         """Handle mouse clicks for ground truth"""
         if event == cv2.EVENT_LBUTTONDOWN and self.waiting_for_click:
+            if not self.gaze_valid:
+                print(f"Muestra rechazada: rayo inválido ({self.last_projection_status})")
+                self.waiting_for_click = False
+                return
             self.click_point = (x, y)
             self.error_distance = self.calculate_error(self.last_gaze_point, self.click_point)
             angular_error = self.calculate_angular_error(self.last_gaze_point, self.click_point)
             nss = self.calculate_nss(self.last_gaze_point, self.click_point)
             
-            # Add sample
             self.add_sample(self.last_gaze_point, self.click_point, self.current_model_name)
             
-            # Las capturas pueden contener rostros y están desactivadas por defecto.
+            # Captures may contain faces and are disabled by default.
             if not self.args.save_captures:
                 print(f"Muestra | Error: {self.error_distance:.1f}px | Angular: {angular_error:.2f}° | NSS: {nss:.3f} (sin guardar)")
                 self.waiting_for_click = False
@@ -1755,12 +1801,12 @@ class GazeAwareADAS:
                 os.makedirs(save_dir, exist_ok=True)
                 ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
                 
-                # 1. Capturar comparativa de Heatmap con el efecto especial solicitado
+                # Save the heatmap comparison.
                 if hasattr(self, 'last_frame') and self.last_frame is not None:
                     frame_to_save = self.generate_heatmap_capture(self.last_frame.copy(), self.last_gaze_point, self.click_point)
                     cv2.imwrite(f"{save_dir}/{ts}_escena_{self.current_model_name}.jpg", frame_to_save)
                 
-                # 2. Capturar rostro del sujeto con su vector de mirada
+                # Save the face crop with its gaze vector.
                 if hasattr(self, 'last_face_debug') and self.last_face_debug is not None:
                     cv2.imwrite(f"{save_dir}/{ts}_sujeto_{self.current_model_name}.jpg", self.last_face_debug)
                     
@@ -1768,14 +1814,17 @@ class GazeAwareADAS:
             except Exception as e:
                 print(f"✅ Muestra | Error: {self.error_distance:.1f}px | Angular: {angular_error:.2f}° | NSS: {nss:.3f} {'🟢' if nss > 1.0 else '🔴'} | ❌ Error al guardar foto: {e}")
             
-            # Reset for next sample
             self.waiting_for_click = False
-            # El punto permanece visible hasta la siguiente muestra.
+            # Keep the point visible until the next sample.
 
 def parse_args():
     parser = argparse.ArgumentParser(description="ADAS y estimación de mirada en tiempo real")
     parser.add_argument("--lr-device-id", help="MXID de la cámara de carretera")
     parser.add_argument("--pro-device-id", help="MXID de la cámara del conductor")
+    parser.add_argument(
+        "--allow-auto-device-order", action="store_true",
+        help="Permitir la asignación insegura LR/Pro usando el orden USB",
+    )
     parser.add_argument("--output-dir", default="outputs", help="Directorio de salidas opcionales")
     parser.add_argument(
         "--extrinsics",

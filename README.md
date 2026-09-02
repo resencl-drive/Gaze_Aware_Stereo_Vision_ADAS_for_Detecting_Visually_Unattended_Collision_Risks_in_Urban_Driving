@@ -26,7 +26,7 @@ Refer to `models/README.md` for the expected model locations. Each required file
 To start the real-time application:
 
 ```bash
-python paquete_metricas_tesis_adas/adas_gaze_realtime.py
+python adas_gaze_realtime.py --lr-device-id MXID_1 --pro-device-id MXID_2
 ```
 
 The driver-facing processing branch uses RGB-D data from the OAK-D Pro. It detects the driver’s face, estimates 35 facial landmarks, aligns the face crop, and computes the 3D origin of the gaze ray using stereo-depth information.
@@ -37,16 +37,25 @@ By default, the application uses a ResNet-101 gaze-estimation backbone together 
 
 `calibracion_extrinseca/extrinsics_pro_to_lr_no_mirror.json`
 
-To explicitly assign the cameras while keeping their hardware identifiers out of the repository, use:
+The existing validated processing convention interprets the model direction
+directly in the OAK-D Pro frame and then applies the published PRO-to-LR
+extrinsic. That behavior remains unchanged.
+
+The validated extrinsic file remains the active calibration and is not
+modified at runtime.
+
+Camera roles must be assigned explicitly because USB enumeration order is not
+stable. This keeps hardware identifiers out of the repository while preventing
+an accidental LR/Pro inversion:
 
 ```bash
-python paquete_metricas_tesis_adas/adas_gaze_realtime.py --lr-device-id MXID_1 --pro-device-id MXID_2
+python adas_gaze_realtime.py --lr-device-id MXID_1 --pro-device-id MXID_2
 ```
 
 Optional outputs can be enabled with:
 
 ```bash
-python paquete_metricas_tesis_adas/adas_gaze_realtime.py \
+python adas_gaze_realtime.py \
   --lr-device-id MXID_1 \
   --pro-device-id MXID_2 \
   --save-reports \
