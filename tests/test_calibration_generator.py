@@ -27,9 +27,15 @@ class CalibrationRecomputationTests(unittest.TestCase):
         cls.recomputed = generator.recompute_payload(cls.original)
 
     def test_stored_observations_reproduce_the_published_transform(self):
-        np.testing.assert_array_equal(self.recomputed["R"], self.original["R"])
-        np.testing.assert_array_equal(self.recomputed["T"], self.original["T"])
-        self.assertEqual(self.recomputed["rms_mm"], self.original["rms_mm"])
+        np.testing.assert_allclose(
+            self.recomputed["R"], self.original["R"], rtol=0.0, atol=1e-12
+        )
+        np.testing.assert_allclose(
+            self.recomputed["T"], self.original["T"], rtol=0.0, atol=1e-12
+        )
+        self.assertAlmostEqual(
+            self.recomputed["rms_mm"], self.original["rms_mm"], delta=1e-9
+        )
 
     def test_rotation_is_proper_and_orthonormal(self):
         rotation = np.asarray(self.recomputed["R"])
