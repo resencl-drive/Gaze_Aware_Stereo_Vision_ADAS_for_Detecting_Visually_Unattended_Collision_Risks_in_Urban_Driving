@@ -49,6 +49,9 @@ learning-rate decay, and early-stopping patience 10. The loss is
 0.5 * SmoothL1(prediction, target) + 0.5 * angular_loss(prediction, target)
 ```
 
+The regression head uses dropout probabilities `0.30` and `0.15`, matching the
+training implementation. Dropout is disabled during inference by `model.eval()`.
+
 The training pipeline resizes crops to `224 x 224`, applies ImageNet
 normalization, color jitter, Gaussian blur, and random erasing, and does not use
 horizontal flipping.

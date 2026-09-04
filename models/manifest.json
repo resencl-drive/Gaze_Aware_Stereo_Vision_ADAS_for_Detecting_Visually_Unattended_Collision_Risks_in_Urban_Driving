@@ -18,7 +18,8 @@
       "artifact_metadata": {
         "container": "OrderedDict",
         "state_dict_keys": 634,
-        "parameter_dtype": "float32"
+        "parameter_dtype": "float32",
+        "dropout_probabilities_during_training": [0.3, 0.15]
       },
       "input": {
         "shape": [1, 3, 224, 224],
