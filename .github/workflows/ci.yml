@@ -33,11 +33,15 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            training/requirements.txt
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install --requirement requirements.txt
+          python -m pip install --requirement training/requirements.txt
 
       - name: Run unit tests
         run: python -m unittest discover -s tests -v

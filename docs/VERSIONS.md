@@ -17,9 +17,10 @@ repository requirements files:
 | TorchVision | 0.26.0 | ResNet architecture and preprocessing |
 | Ultralytics | 8.4.41 | YOLOv8 instance-segmentation runtime |
 | h5py | 3.14.0 | Training-data reader; training only |
+| Pillow | 12.2.0 | Training image processing |
 
 `requirements.txt` defines the runtime environment and
-`training/requirements.txt` adds the training-only dependency. Transitive
+`training/requirements.txt` adds the training-only dependencies. Transitive
 dependencies are not locked; use a resolved environment export if byte-for-byte
 environment reconstruction is required.
 
