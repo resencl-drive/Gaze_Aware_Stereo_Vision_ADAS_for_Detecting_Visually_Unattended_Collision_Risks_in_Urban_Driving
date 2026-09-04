@@ -55,6 +55,11 @@ extrinsic. That behavior remains unchanged.
 The validated extrinsic file remains the active calibration and is not
 modified at runtime.
 
+The source used to generate and audit this calibration is included in
+`calibracion_extrinseca/generate_extrinsics_no_mirror.py`. See the calibration
+README in that directory for the checkerboard specification, capture procedure,
+and offline recomputation command.
+
 Camera roles must be assigned explicitly because USB enumeration order is not
 stable. This keeps hardware identifiers out of the repository while preventing
 an accidental LR/Pro inversion:
