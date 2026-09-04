@@ -1,7 +1,14 @@
 cff-version: 1.2.0
-message: "If you use this software, please cite the associated article."
+message: "If you use this software, please cite this software release."
 title: "Gaze-Aware Stereo Vision ADAS"
 type: software
+version: 1.0.0
+
+abstract: >-
+  Research software for real-time driver gaze estimation, stereo-vision-based
+  depth processing, ADAS object detection, gaze projection, time-to-collision
+  estimation, and driver-attention warning analysis using dual OAK-D cameras.
+
 authors:
   - family-names: "Resendiz-Jurado"
     given-names: "Claudia"
@@ -15,5 +22,16 @@ authors:
     given-names: "Julio Alejandro"
   - family-names: "Alfonso-Francia"
     given-names: "Gendry"
-date-released: 2026-08-04
+
+keywords:
+  - ADAS
+  - gaze estimation
+  - driver monitoring
+  - stereo vision
+  - road safety
+  - OAK-D
+  - computer vision
+  - time-to-collision
+
 license: AGPL-3.0-only
+repository-code: "https://github.com/resencl/gaze-aware-stereo-vision-adas"
