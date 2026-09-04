@@ -41,6 +41,24 @@ class ModelManifestTests(unittest.TestCase):
                 self.assertEqual(path.parts[0], "models")
                 self.assertIn(path.suffix, ignored_suffixes)
 
+    def test_gaze_training_architecture_is_explicit(self):
+        gaze_model = next(
+            model
+            for model in self.manifest["models"]
+            if model["id"] == "gaze-resnet101-v2"
+        )
+        self.assertEqual(
+            gaze_model["training_architecture"],
+            {
+                "dropout_1": 0.30,
+                "dropout_2": 0.15,
+                "activation": "ReLU",
+                "normalization": "LayerNorm",
+                "output_dimensions": 2,
+                "output_order": ["pitch_rad", "yaw_rad"],
+            },
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
