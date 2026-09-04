@@ -1,22 +1,27 @@
-# Modelos externos
+# External models
 
-Esta carpeta se publica vacía. Los pesos no forman parte del repositorio.
+This directory intentionally contains no model weights. The application does
+not download weights automatically and fails early when a required file is
+missing.
 
-Archivos esperados por la configuración predeterminada:
+The default configuration expects:
 
-- `resnet101_v2.pt`: checkpoint de mirada entrenado con ETH-XGaze. **No puede
-  redistribuirse** Los
-  términos de ETH-XGaze prohíben redistribuir parámetros originales o
-  convertidos y restringen su uso a investigación académica no comercial. Cada
-  usuario debe tener autorización directa y preparar su propio checkpoint.
-- `yolov8n-seg.pt`: modelo de segmentación compatible con Ultralytics. Debe
-  obtenerse de su fuente oficial bajo AGPL-3.0 o una licencia comercial.
-- `face-detection-retail-0004.blob`: detector facial de Open Model Zoo,
-  distribuido separadamente bajo Apache-2.0.
-- `facial-landmarks-35-adas-0002.blob`: localizador de Open Model Zoo bajo
-  Apache-2.0, con entrada 60 x 60 y salida de 70 coordenadas normalizadas.
+- `resnet101_v2.pt`
+- `yolov8n-seg.pt`
+- `face-detection-retail-0004.blob`
+- `facial-landmarks-35-adas-0002.blob`
 
-Se pueden indicar otras rutas mediante `--gaze-model`, `--yolo-model`,
-`--face-detector-model` y `--landmark-model`. Un modelo YOLO alternativo debe conservar una salida
-de segmentación compatible; un detector que solo produzca cajas no es un
-reemplazo directo.
+See [`manifest.json`](manifest.json) for the model versions, interfaces,
+verified file sizes, SHA-256 fingerprints, upstream sources, and distribution
+status. A fingerprint identifies the artifact used for the reported system; it
+does not grant permission to redistribute that artifact.
+
+Paths can be overridden with `--gaze-model`, `--yolo-model`,
+`--face-detector-model`, and `--landmark-model`. Replacements must preserve the
+interfaces documented in the manifest. In particular, a detection-only YOLO
+model is not a drop-in replacement for the required instance-segmentation
+model.
+
+Users are responsible for obtaining each model from an authorized source and
+complying with its license and dataset terms. Do not commit model files to this
+repository.

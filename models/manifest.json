@@ -1,0 +1,137 @@
+{
+  "manifest_version": "1.0",
+  "last_verified": "2026-09-03",
+  "weights_in_repository": false,
+  "hash_algorithm": "SHA-256",
+  "models": [
+    {
+      "id": "gaze-resnet101-v2",
+      "version": "resnet101_v2",
+      "required": true,
+      "default_path": "models/resnet101_v2.pt",
+      "cli_option": "--gaze-model",
+      "task": "monocular gaze-angle regression",
+      "format": "PyTorch state_dict",
+      "architecture": "torchvision ResNet-101 with a 2048-512-256-2 LayerNorm regression head",
+      "artifact_size_bytes": 175323993,
+      "sha256": "b589263c784369959adc01687ff258dba3b6dbb99ea97c96f71a37bc6b274bfb",
+      "artifact_metadata": {
+        "container": "OrderedDict",
+        "state_dict_keys": 634,
+        "parameter_dtype": "float32"
+      },
+      "input": {
+        "shape": [1, 3, 224, 224],
+        "color_order": "RGB",
+        "dtype": "float32",
+        "normalization_mean": [0.485, 0.456, 0.406],
+        "normalization_std": [0.229, 0.224, 0.225]
+      },
+      "output": {
+        "shape": [1, 2],
+        "dtype": "float32",
+        "fields": ["pitch_rad", "yaw_rad"]
+      },
+      "source_type": "trained by the project on ETH-XGaze",
+      "source": "training/train_gaze_models.py",
+      "upstream_dataset": "https://ait.ethz.ch/xgaze",
+      "distribution": "not redistributed; users must train or obtain an authorized checkpoint",
+      "license_note": "Use is subject to the repository license and all applicable ETH-XGaze terms."
+    },
+    {
+      "id": "yolov8n-seg-coco",
+      "version": "checkpoint metadata: Ultralytics 8.0.0.dev0, dated 2023-01-04",
+      "required": true,
+      "default_path": "models/yolov8n-seg.pt",
+      "cli_option": "--yolo-model",
+      "task": "COCO instance segmentation",
+      "format": "Ultralytics PyTorch checkpoint",
+      "architecture": "YOLOv8n-seg",
+      "artifact_size_bytes": 7071756,
+      "sha256": "a7cd8f929e1903d78a12a48efecab430209f18dc46cb96c3599a5980c63c423c",
+      "artifact_metadata": {
+        "training_data": "coco.yaml",
+        "training_image_size": 640,
+        "classes": 80,
+        "task": "segment"
+      },
+      "input": {
+        "shape": "Ultralytics-managed; runtime frame is 640x360 and is letterboxed for inference",
+        "color_order": "BGR host frame; converted internally by Ultralytics"
+      },
+      "output": {
+        "fields": ["boxes_xyxy", "class_ids", "instance_mask_polygons"]
+      },
+      "source_type": "external pretrained model",
+      "source": "https://docs.ultralytics.com/models/yolov8/",
+      "distribution": "not redistributed by this repository",
+      "license_note": "The inspected checkpoint declares the AGPL-3.0 license; Ultralytics also offers commercial licensing."
+    },
+    {
+      "id": "face-detection-retail-0004",
+      "version": "Open Model Zoo 0004; OpenVINO blob version 2022.1",
+      "required": true,
+      "default_path": "models/face-detection-retail-0004.blob",
+      "cli_option": "--face-detector-model",
+      "task": "face detection",
+      "format": "DepthAI OpenVINO blob",
+      "architecture": "SqueezeNet-derived SSD",
+      "artifact_size_bytes": 1338059,
+      "sha256": "d8904f911af4edb2b27f9d3788b7138cff72b4dbc53547402755de64292df438",
+      "artifact_metadata": {
+        "openvino_blob_version": "2022.1"
+      },
+      "input": {
+        "name": "data",
+        "shape": [1, 3, 300, 300],
+        "layout": "NCHW",
+        "dtype": "U8F",
+        "color_order": "BGR"
+      },
+      "output": {
+        "name": "detection_out",
+        "shape": [1, 1, 200, 7],
+        "layout": "NCHW",
+        "dtype": "FP16"
+      },
+      "source_type": "external pretrained model",
+      "source": "https://github.com/openvinotoolkit/open_model_zoo/tree/master/models/intel/face-detection-retail-0004",
+      "distribution": "blob not redistributed by this repository",
+      "license_note": "Open Model Zoo model; Apache-2.0."
+    },
+    {
+      "id": "facial-landmarks-35-adas-0002",
+      "version": "Open Model Zoo 0002; OpenVINO blob version 2022.1",
+      "required": true,
+      "default_path": "models/facial-landmarks-35-adas-0002.blob",
+      "cli_option": "--landmark-model",
+      "task": "35-point facial-landmark regression",
+      "format": "DepthAI OpenVINO blob",
+      "architecture": "Open Model Zoo custom convolutional network",
+      "artifact_size_bytes": 9388271,
+      "sha256": "acb53987995adaae159001bf1933af9ace648aa910c02e4a76422e075dc67ff0",
+      "artifact_metadata": {
+        "openvino_blob_version": "2022.1",
+        "landmark_count": 35
+      },
+      "input": {
+        "name": "data",
+        "shape": [1, 3, 60, 60],
+        "layout": "NCHW",
+        "dtype": "U8F",
+        "color_order": "BGR"
+      },
+      "output": {
+        "name": "align_fc3",
+        "shape": [1, 70],
+        "layout": "NC",
+        "dtype": "FP16",
+        "fields": "35 normalized (x, y) coordinate pairs"
+      },
+      "source_type": "external pretrained model",
+      "source": "https://github.com/openvinotoolkit/open_model_zoo/tree/master/models/intel/facial-landmarks-35-adas-0002",
+      "distribution": "blob not redistributed by this repository",
+      "license_note": "Open Model Zoo model; Apache-2.0."
+    }
+  ]
+}

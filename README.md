@@ -5,6 +5,15 @@
 
 This repository contains the implementation associated with the paper, including driver gaze estimation, ADAS object detection, depth estimation, time-to-collision (TTC) computation, and performance metrics using two OAK-D cameras.
 
+## Reproducibility Documentation
+
+- [`docs/DATA_DICTIONARY.md`](docs/DATA_DICTIONARY.md) defines training,
+  calibration, runtime-report, metric, and optional media data.
+- [`models/manifest.json`](models/manifest.json) records every required external
+  model, its interface, source, distribution status, size, and SHA-256.
+- [`docs/VERSIONS.md`](docs/VERSIONS.md) records the pinned software environment,
+  model-version distinction, hardware configuration, and stream rates.
+
 ## Privacy
 
 By default, the application does not write videos, images, dataset frames, or reports to disk. Interface metrics are maintained in memory, and the physical identifiers of the cameras are not included in the source code.
