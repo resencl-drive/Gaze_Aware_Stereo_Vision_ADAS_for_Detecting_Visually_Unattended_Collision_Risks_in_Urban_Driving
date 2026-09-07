@@ -3,7 +3,7 @@ message: "If you use this software, please cite this software release."
 title: "Gaze-Aware Stereo Vision ADAS"
 type: software
 version: 1.0.0
-date-released: 2026-09-05
+date-released: 2026-09-07
 
 abstract: >-
   Research software for real-time driver gaze estimation, stereo-vision-based
@@ -35,4 +35,4 @@ keywords:
   - time-to-collision
 
 license: AGPL-3.0-only
-repository-code: "https://github.com/resencl/gaze-aware-stereo-vision-adas"
+repository-code: "https://github.com/resencl-drive/Gaze_Aware_Stereo_Vision_ADAS_for_Detecting_Visually_Unattended_Collision_Risks_in_Urban_Driving"
